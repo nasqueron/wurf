@@ -18,15 +18,11 @@
 #  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 
 
-import os, sys, tempfile, shutil, getopt, commands
+import os, sys, select, getopt, commands
 import urllib, BaseHTTPServer, SimpleHTTPServer
 
 maxdownloads = 1
 port = 8080
-
-tarfile = None
-tarfilename = None
-location = "/"
 
 cpid = -1
 
@@ -39,17 +35,21 @@ def find_ip ():
    netstat = commands.getoutput ("LC_MESSAGES=C netstat -rn")
    defiface = [i.split ()[-1] for i in netstat.split ('\n')
                                  if i.split ()[0] == "0.0.0.0"]
-   if not defiface: return None
+   if not defiface:
+      return None
    ifcfg = commands.getoutput ("LC_MESSAGES=C ifconfig "
                                + defiface[0]).split ("inet addr:")
-   if len (ifcfg) != 2: return None
+   if len (ifcfg) != 2:
+      return None
    ip_addr = ifcfg[1].split ()[0]
 
    # sanity check
    try:
       ints = [ i for i in ip_addr.split (".") if 0 <= int(i) <= 255]
-      if len (ints) != 4: return None
-   except ValueError: return None
+      if len (ints) != 4:
+         return None
+   except ValueError:
+      return None
 
    return ip_addr
 
@@ -102,16 +102,31 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
       cpid = os.fork ()
       if cpid == 0:
          # Child process
-         f = open (self.filename)
-         size = os.path.getsize (self.filename)
+         size = -1
+         datafile = None
+         
+         if os.path.isfile (self.filename):
+            size = os.path.getsize (self.filename)
+            datafile = open (self.filename)
+         elif os.path.isdir (self.filename):
+            os.environ['fileserv_dir'], os.environ['fileserv_file'] = os.path.split (self.filename)
+            infile, datafile = os.popen2 ('cd "$fileserv_dir" ; tar cfz - "$fileserv_file"')
 
          self.send_response (200)
          self.send_header ("Content-type", "application/octet-stream")
-         self.send_header ("Content-Length", size)
+         if size >= 0:
+            self.send_header ("Content-Length", size)
          self.end_headers ()
-         shutil.copyfileobj (f, self.wfile)
-         f.close ()
 
+         while 1:
+            if select.select ([datafile], [], [], 2)[0]:
+               c = datafile.read (1024)
+               if c:
+                  self.wfile.write (c)
+               else:
+                  datafile.close ()
+                  return
+               
 
 def serve_files (filename, location, port):
    # We have to somehow push the filename of the file to serve to the
@@ -142,8 +157,10 @@ def usage (errmsg = None):
    sys.exit (1)
 
 
+
 def main ():
-   global cpid, port, tarfile, tarfilename, maxdownloads, location
+   global cpid, port, maxdownloads
+   location = None
 
    try:
       options, filenames = getopt.getopt (sys.argv[1:], "c:p:")
@@ -159,29 +176,11 @@ def main ():
       usage ("%s: No such file or directory" % filenames[0])
 
    if os.path.isfile (filename):
-      tarfilename = None
       location = "/" + urllib.quote (os.path.basename (filename))
-
    elif os.path.isdir (filename):
-      tarfile, tarfilename = tempfile.mkstemp (".tar.gz")
-
       location = "/" + urllib.quote (os.path.basename (filename + ".tar.gz"))
-
-      r = os.spawnlp (os.P_WAIT, 'tar', 'tar', 'czf', tarfilename, filenames[0])
-      if r != 0:
-         usage ("error while creating archive '%s' - see above" % tarfilename)
-
-      filename = tarfilename
-
    else:
       usage ("%s: Neither file nor directory" % filenames[0])
-
-   try:
-      # Check for readability
-      os.path.getsize (filename)
-      open (filename).close ()
-   except (OSError, IOError):
-      usage ("%s: Not readable" % filenames[0])
 
    for option, val in options:
       if option == '-c':
@@ -193,11 +192,12 @@ def main ():
             usage ("invalid download count: %r. "
                    "Please specify an integer >= 0." % val)
 
-      if option == '-p':
+      elif option == '-p':
          try:
             port = int (val)
          except ValueError:
             usage ("invalid port number: %r. Please specify an integer" % value)
+
       else:
          usage ("Unknown option: %r" % option)
 
@@ -214,17 +214,10 @@ def main ():
          pass
 
 
+
 if __name__=='__main__':
    try:
-      try:
-         main ()
-      except KeyboardInterrupt:
-         pass
-   finally:
-      # delete temporary archive
+      main ()
+   except KeyboardInterrupt:
+      pass
 
-      if cpid != 0 and tarfilename:
-         os.close (tarfile)
-         os.remove (tarfilename)
-
-      
