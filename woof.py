@@ -18,9 +18,12 @@
 #  Free Software  Foundation, Inc., 59 Temple Place - Suite 330,
 #  Boston, MA 02111-1307, USA.
 
+# Darwin support with the help from Mat Caughron, <mat@phpconsulting.com>
+# Solaris support by Colin Marquardt, <colin.marquardt@zmd.de>
+# FreeBSD support with the help from Andy Gimblett, <A.M.Gimblett@swansea.ac.uk>
 
 import sys, os, popen2, signal, select, socket, getopt, commands
-import urllib, BaseHTTPServer, SimpleHTTPServer
+import urllib, BaseHTTPServer
 import ConfigParser
 
 maxdownloads = 1
@@ -39,10 +42,14 @@ def find_ip ():
       netstat = commands.getoutput ("LC_MESSAGES=C netstat -rn")
       defiface = [i.split ()[-1] for i in netstat.split ('\n')
                                     if i.split ()[0] == "0.0.0.0"]
-   elif platform == "Darwin":
+   elif platform in ("Darwin", "FreeBSD"):
       netstat = commands.getoutput ("LC_MESSAGES=C netstat -rn")
       defiface = [i.split ()[-1] for i in netstat.split ('\n')
                                     if len(i) > 2 and i.split ()[0] == "default"]
+   elif platform == "SunOS":
+      netstat = commands.getoutput ("LC_MESSAGES=C netstat -arn")
+      defiface = [i.split ()[-1] for i in netstat.split ('\n')
+                                    if len(i) > 2 and i.split ()[0] == "0.0.0.0"]
    else:
       print >>sys.stderr, "Unsupported platform; please add support for your platform in find_ip().";
       return None
@@ -53,7 +60,7 @@ def find_ip ():
    if platform == "Linux":
       ifcfg = commands.getoutput ("LC_MESSAGES=C ifconfig "
                                   + defiface[0]).split ("inet addr:")
-   elif platform == "Darwin":
+   elif platform in ("Darwin", "FreeBSD", "SunOS"):
       ifcfg = commands.getoutput ("LC_MESSAGES=C ifconfig "
                                   + defiface[0]).split ("inet ")
 
@@ -220,6 +227,8 @@ def usage (defport, defmaxdown, errmsg = None):
         [main]
         port = 8008
         count = 2
+	ip = 127.0.0.1
+	compressed = true
    """ % (name, name, name, defmaxdown, defport)
    if errmsg:
       print >>sys.stderr, errmsg
@@ -245,7 +254,7 @@ def main ():
       maxdown = config.getint ('main', 'count')
 
    if config.has_option ('main', 'ip'):
-      maxdown = config.get ('main', 'ip')
+      ip_addr = config.get ('main', 'ip')
 
    if config.has_option ('main', 'compressed'):
       compressed = config.getboolean ('main', 'compressed')
