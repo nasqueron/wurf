@@ -154,14 +154,19 @@ def serve_files (filename, maxdown = 1, port = 8080):
 
 def usage (errmsg = None):
    name = os.path.basename (sys.argv[0])
+   print >>sys.stderr, """
+    Usage: %s [-p <port>] [-c <count>] <file/dir>
+           %s [-p <port>] [-c <count>] -s
+   
+    Serves a single file <count> times via http on port <port>."
+    When a directory is specified, a .tar.gz archive gets served,"
+    when -s is specified instead of a filename, %s distributes itself.
+   
+    defaults: count = 1, port = 8080
+   """ % (name, name, name)
    if errmsg:
       print >>sys.stderr, errmsg
       print >>sys.stderr
-   print >>sys.stderr, "Usage: %s [-p <port>] [-c <count>] [file]" % name
-   print >>sys.stderr, "       %s [-p <port>] [-c <count>] -s\n" % name
-   print >>sys.stderr, "  serves a single file <count> times via http on port <port>."
-   print >>sys.stderr, "  When -s is specified instead of a filename, fileserv distributes itself.\n"
-   print >>sys.stderr, "  defaults: count = 1, port = 8080\n"
    sys.exit (1)
 
 
