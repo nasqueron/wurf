@@ -26,6 +26,7 @@ port = 8080
 
 cpid = -1
 
+
 # Utility function to guess the IP (as a string) where the server can be
 # reached from the outside. Quite nasty problem actually.
 
@@ -65,7 +66,6 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
    protocol_version = "HTTP/1.0"
 
    filename = "."
-   location = "/"
 
    def log_request (self, code='-', size='-'):
       if code == 200:
@@ -79,15 +79,18 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
       # This hands over the filename to the client.
 
       self.path = urllib.quote (urllib.unquote (self.path))
+      location = "/" + urllib.quote (os.path.basename (self.filename))
+      if os.path.isdir (self.filename):
+         location += ".tar.gz"
 
-      if self.path != self.location:
+      if self.path != location:
          txt = """\
                 <html>
                    <head><title>302 Found</title></head>
                    <body>302 Found <a href="%s">here</a>.</body>
-                </html>\n""" % self.location
+                </html>\n""" % location
          self.send_response (302)
-         self.send_header ("Location", self.location)
+         self.send_header ("Location", location)
          self.send_header ("Content-type", "text/html")
          self.send_header ("Content-Length", str (len (txt)))
          self.end_headers ()
@@ -110,7 +113,7 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
             datafile = open (self.filename)
          elif os.path.isdir (self.filename):
             os.environ['fileserv_dir'], os.environ['fileserv_file'] = os.path.split (self.filename)
-            infile, datafile = os.popen2 ('cd "$fileserv_dir" ; tar cfz - "$fileserv_file"')
+            datafile = os.popen ('cd "$fileserv_dir";tar cfz - "$fileserv_file"')
 
          self.send_response (200)
          self.send_header ("Content-type", "application/octet-stream")
@@ -128,12 +131,11 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
                   return
                
 
-def serve_files (filename, location, port):
+def serve_files (filename, port):
    # We have to somehow push the filename of the file to serve to the
    # class handling the requests. This is an evil way to do this...
 
    FileServHTTPRequestHandler.filename = filename
-   FileServHTTPRequestHandler.location = location
 
    httpd = BaseHTTPServer.HTTPServer (('', port),
                                       FileServHTTPRequestHandler)
@@ -160,7 +162,6 @@ def usage (errmsg = None):
 
 def main ():
    global cpid, port, maxdownloads
-   location = None
 
    try:
       options, filenames = getopt.getopt (sys.argv[1:], "c:p:")
@@ -175,11 +176,7 @@ def main ():
    if not os.path.exists (filename):
       usage ("%s: No such file or directory" % filenames[0])
 
-   if os.path.isfile (filename):
-      location = "/" + urllib.quote (os.path.basename (filename))
-   elif os.path.isdir (filename):
-      location = "/" + urllib.quote (os.path.basename (filename + ".tar.gz"))
-   else:
+   if not (os.path.isfile (filename) or os.path.isdir (filename)):
       usage ("%s: Neither file nor directory" % filenames[0])
 
    for option, val in options:
@@ -201,11 +198,9 @@ def main ():
       else:
          usage ("Unknown option: %r" % option)
 
-
-   serve_files (filename, location, port)
+   serve_files (filename, port)
 
    # wait for child processes to terminate
-
    if cpid != 0:
       try:
          while 1:
