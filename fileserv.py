@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-
+#
 #  fileserv.py -- an ad-hoc single file webserver
 #  Copyright (C) 2004 Simon Budig  <simon@budig.de>
 # 
@@ -13,17 +13,16 @@
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #  GNU General Public License for more details.
 # 
-#  You should have received a copy of the GNU General Public License
-#  along with this program; if not, write to the Free Software
-#  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+#  A copy of the GNU General Public License is available at
+#  http://www.fsf.org/licenses/gpl.txt, you can also write to the
+#  Free Software  Foundation, Inc., 59 Temple Place - Suite 330,
+#  Boston, MA 02111-1307, USA.
 
 
 import os, sys, select, getopt, commands
 import urllib, BaseHTTPServer, SimpleHTTPServer
 
 maxdownloads = 1
-port = 8080
-
 cpid = -1
 
 
@@ -31,7 +30,7 @@ cpid = -1
 # reached from the outside. Quite nasty problem actually.
 
 def find_ip ():
-   os.environ["PATH"] += ":/sbin:/usr/sbin:/usr/local/sbin"
+   os.environ["PATH"] = "/sbin:/usr/sbin:/usr/local/sbin:" + os.environ["PATH"]
 
    netstat = commands.getoutput ("LC_MESSAGES=C netstat -rn")
    defiface = [i.split ()[-1] for i in netstat.split ('\n')
@@ -131,7 +130,11 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
                   return
                
 
-def serve_files (filename, port):
+def serve_files (filename, maxdown = 1, port = 8080):
+   global maxdownloads
+
+   maxdownloads = maxdown
+
    # We have to somehow push the filename of the file to serve to the
    # class handling the requests. This is an evil way to do this...
 
@@ -150,23 +153,54 @@ def serve_files (filename, port):
 
 
 def usage (errmsg = None):
+   name = os.path.basename (sys.argv[0])
    if errmsg:
       print >>sys.stderr, errmsg
       print >>sys.stderr
-   print >>sys.stderr, "Usage: %s [-p <port>] [-c <count>] [file]" % sys.argv[0]
-   print >>sys.stderr, "    serves a single file <count> times via http on port <port>"
-   print >>sys.stderr, "    defaults: count = 1, port = 8080"
+   print >>sys.stderr, "Usage: %s [-p <port>] [-c <count>] [file]" % name
+   print >>sys.stderr, "       %s [-p <port>] [-c <count>] -s\n" % name
+   print >>sys.stderr, "  serves a single file <count> times via http on port <port>."
+   print >>sys.stderr, "  When -s is specified instead of a filename, fileserv distributes itself.\n"
+   print >>sys.stderr, "  defaults: count = 1, port = 8080\n"
    sys.exit (1)
 
 
 
 def main ():
-   global cpid, port, maxdownloads
+   global cpid
+
+   maxdown = 1
+   port = 8080
 
    try:
-      options, filenames = getopt.getopt (sys.argv[1:], "c:p:")
+      options, filenames = getopt.getopt (sys.argv[1:], "hsc:p:")
    except getopt.GetoptError, desc:
       usage (desc)
+
+   for option, val in options:
+      if option == '-c':
+         try:
+            maxdown = int (val)
+            if maxdown <= 0:
+               raise ValueError
+         except ValueError:
+            usage ("invalid download count: %r. "
+                   "Please specify an integer >= 0." % val)
+
+      elif option == '-p':
+         try:
+            port = int (val)
+         except ValueError:
+            usage ("invalid port number: %r. Please specify an integer" % value)
+
+      elif option == '-s':
+         filenames.append (__file__)
+
+      elif option == '-h':
+         usage ()
+
+      else:
+         usage ("Unknown option: %r" % option)
 
    if len (filenames) == 1:
       filename = os.path.abspath (filenames[0])
@@ -179,26 +213,7 @@ def main ():
    if not (os.path.isfile (filename) or os.path.isdir (filename)):
       usage ("%s: Neither file nor directory" % filenames[0])
 
-   for option, val in options:
-      if option == '-c':
-         try:
-            maxdownloads = int (val)
-            if maxdownloads <= 0:
-               raise ValueError
-         except ValueError:
-            usage ("invalid download count: %r. "
-                   "Please specify an integer >= 0." % val)
-
-      elif option == '-p':
-         try:
-            port = int (val)
-         except ValueError:
-            usage ("invalid port number: %r. Please specify an integer" % value)
-
-      else:
-         usage ("Unknown option: %r" % option)
-
-   serve_files (filename, port)
+   serve_files (filename, maxdown, port)
 
    # wait for child processes to terminate
    if cpid != 0:
