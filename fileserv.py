@@ -1,9 +1,64 @@
 #!/usr/bin/env python
 
-import os, sys, shutil, getopt, urllib, BaseHTTPServer, SimpleHTTPServer
+#  fileserv.py -- an ad-hoc single file webserver
+#  Copyright (C) 2004 Simon Budig  <simon@budig.de>
+# 
+#  This program is free software; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation; either version 2 of the License, or
+#  (at your option) any later version.
+# 
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+# 
+#  You should have received a copy of the GNU General Public License
+#  along with this program; if not, write to the Free Software
+#  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+
+
+import os, sys, tempfile, shutil, getopt, commands
+import urllib, BaseHTTPServer, SimpleHTTPServer
 
 maxdownloads = 1
+port = 8080
+
+tarfile = None
+tarfilename = None
+location = "/"
+
 cpid = -1
+
+# Utility function to guess the IP (as a string) where the server can be
+# reached from the outside. Quite nasty problem actually.
+
+def find_ip ():
+   os.environ["PATH"] += ":/sbin:/usr/sbin:/usr/local/sbin"
+
+   netstat = commands.getoutput ("LC_MESSAGES=C netstat -rn")
+   defiface = [i.split ()[-1] for i in netstat.split ('\n')
+                                 if i.split ()[0] == "0.0.0.0"]
+   if not defiface: return None
+   ifcfg = commands.getoutput ("LC_MESSAGES=C ifconfig "
+                               + defiface[0]).split ("inet addr:")
+   if len (ifcfg) != 2: return None
+   ip_addr = ifcfg[1].split ()[0]
+
+   # sanity check
+   try:
+      ints = [ i for i in ip_addr.split (".") if 0 <= int(i) <= 255]
+      if len (ints) != 4: return None
+   except ValueError: return None
+
+   return ip_addr
+
+   
+# Main class implementing an HTTP-Requesthandler, that serves just a single
+# file and redirects all other requests to this file (this passes the actual
+# filename to the client).
+# Currently it is impossible to serve different files with different
+# instances of this class.
 
 class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
    server_version = "Simons FileServer"
@@ -22,6 +77,8 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
 
       # Redirect any request to the filename of the file to serve.
       # This hands over the filename to the client.
+
+      self.path = urllib.quote (urllib.unquote (self.path))
 
       if self.path != self.location:
          txt = """\
@@ -56,31 +113,37 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
          f.close ()
 
 
+def serve_files (filename, location, port):
+   # We have to somehow push the filename of the file to serve to the
+   # class handling the requests. This is an evil way to do this...
 
-class ForkingDownloadHTTPRequestHandler (SimpleHTTPServer.SimpleHTTPRequestHandler):
-   def guess_type (self, path):
-      return self.extensions_map['']
+   FileServHTTPRequestHandler.filename = filename
+   FileServHTTPRequestHandler.location = location
 
-   def do_GET (self):
-      global cpid
+   httpd = BaseHTTPServer.HTTPServer (('', port),
+                                      FileServHTTPRequestHandler)
 
-      cpid = os.fork ()
-      if cpid == 0:
-         # Child process
-         SimpleHTTPServer.SimpleHTTPRequestHandler.do_GET (self)
+   ip = find_ip ()
+   if ip:
+      print "Now serving on http://%s:%s/" % (ip, httpd.server_port)
+
+   while cpid != 0 and maxdownloads > 0:
+      httpd.handle_request ()
 
 
 
 def usage (errmsg = None):
    if errmsg:
       print >>sys.stderr, errmsg
-   print >>sys.stderr, "Usage:", sys.argv[0], "[-p <port>] [-c <count>] [file]"
+      print >>sys.stderr
+   print >>sys.stderr, "Usage: %s [-p <port>] [-c <count>] [file]" % sys.argv[0]
+   print >>sys.stderr, "    serves a single file <count> times via http on port <port>"
+   print >>sys.stderr, "    defaults: count = 1, port = 8080"
    sys.exit (1)
 
-if __name__=='__main__':
-   port = 8080
-   serve_file = True
-   location = "/"
+
+def main ():
+   global cpid, port, tarfile, tarfilename, maxdownloads, location
 
    try:
       options, filenames = getopt.getopt (sys.argv[1:], "c:p:")
@@ -89,7 +152,6 @@ if __name__=='__main__':
 
    if len (filenames) == 1:
       filename = os.path.abspath (filenames[0])
-      location = "/" + urllib.quote (os.path.basename (filename))
    else:
       usage ("Can only serve single files/directories.")
 
@@ -97,28 +159,39 @@ if __name__=='__main__':
       usage ("%s: No such file or directory" % filenames[0])
 
    if os.path.isfile (filename):
-      serve_file = True
+      tarfilename = None
+      location = "/" + urllib.quote (os.path.basename (filename))
+
    elif os.path.isdir (filename):
-      serve_file = False
+      tarfile, tarfilename = tempfile.mkstemp (".tar.gz")
+
+      location = "/" + urllib.quote (os.path.basename (filename + ".tar.gz"))
+
+      r = os.spawnlp (os.P_WAIT, 'tar', 'tar', 'czf', tarfilename, filenames[0])
+      if r != 0:
+         usage ("error while creating archive '%s' - see above" % tarfilename)
+
+      filename = tarfilename
+
    else:
       usage ("%s: Neither file nor directory" % filenames[0])
 
-   if serve_file:
-      try:
-         # Check for readability
-         os.path.getsize (filename)
-         open (filename).close ()
-      except (OSError, IOError):
-         usage ("%s: Not readable" % filenames[0])
+   try:
+      # Check for readability
+      os.path.getsize (filename)
+      open (filename).close ()
+   except (OSError, IOError):
+      usage ("%s: Not readable" % filenames[0])
 
    for option, val in options:
       if option == '-c':
-         if not serve_file:
-            print >>sys.stderr, "WARNING: Download count ignored for directories."
          try:
             maxdownloads = int (val)
+            if maxdownloads <= 0:
+               raise ValueError
          except ValueError:
-            usage ("invalid download count: %r. Please specify an integer." % val)
+            usage ("invalid download count: %r. "
+                   "Please specify an integer >= 0." % val)
 
       if option == '-p':
          try:
@@ -128,29 +201,8 @@ if __name__=='__main__':
       else:
          usage ("Unknown option: %r" % option)
 
-   # Directories sollten eigentlich als .tar.gz geliefert werden.
-   # tempfile.mkstemp()
 
-   if serve_file:
-      # We have to somehow push the filename of the file to serve to the
-      # class handling the requests. This is an evil way to do this...
-
-      FileServHTTPRequestHandler.filename = filename
-      FileServHTTPRequestHandler.location = location
-
-      httpd = BaseHTTPServer.HTTPServer (('', port),
-                                         FileServHTTPRequestHandler)
-      while cpid != 0 and maxdownloads > 0:
-         httpd.handle_request ()
-
-   else:
-      httpd = BaseHTTPServer.HTTPServer (('', port),
-                                         ForkingDownloadHTTPRequestHandler)
-      while cpid != 0:
-         httpd.handle_request ()
-
-
-
+   serve_files (filename, location, port)
 
    # wait for child processes to terminate
 
@@ -160,3 +212,19 @@ if __name__=='__main__':
             os.wait ()
       except OSError:
          pass
+
+
+if __name__=='__main__':
+   try:
+      try:
+         main ()
+      except KeyboardInterrupt:
+         pass
+   finally:
+      # delete temporary archive
+
+      if cpid != 0 and tarfilename:
+         os.close (tarfile)
+         os.remove (tarfilename)
+
+      
